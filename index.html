@@ -2597,7 +2597,7 @@ class CorrScopeVisualizer {
       // 波形 (クリップして隣のセルへはみ出さない)
       c.save();
       c.beginPath(); c.rect(x0, y0, cw, ch); c.clip();
-      c.strokeStyle = '#fff'; c.lineWidth = Math.max(1.5, 1.6 * dpr); c.lineJoin = 'round';
+      c.strokeStyle = '#fff'; c.lineWidth = Math.max(1, 1 * dpr); c.lineJoin = 'round';
       c.beginPath();
       const step = Math.max(1, Math.ceil(N / cw));      // 1px 列あたり最小/最大の 2 点
       if (K) {                                              // wasm: 描画点列を生成 → JS は lineTo するだけ
