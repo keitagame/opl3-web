@@ -2330,8 +2330,65 @@ if (typeof window !== 'undefined') {
     decompressVgz
   };
 }
+// =====================================================================
+//  オシロスコープ WebAssembly カーネル (scope.wasm)
+//   重い計算 (トリガ探索 / 平均化 / ピーク / 波形の間引き点列) を wasm で実行。描画 (canvas) は JS のまま。
+//   ソース: scope.wsrc (自作アセンブラ wasmasm.py でビルド)。base64 埋め込みなので外部ファイル不要。
+//   読み込み前・失敗時は従来の JS 実装で動く。
+// =====================================================================
+const SC = { D: 0, DMAX: 32768, DS: 131072, DSMAX: 4096, CS: 147456, BUF: 180256, WIN: 188448,
+             BW: 196640, CUR: 204832, POLY: 213088, CSD: 475264, WMAX: 2048, NMAX: 16384, PAGES: 12 };
+const SCOPE_WASM_B64 = `
+AGFzbQEAAAABbwtgA39/fwBgBn9/f398fwBgA39/fwF8YAR/f398AXxgAn9/AX9gBH9/f38BfGANf39/f39/f398fH98fAF/YA5/f39/f39/f398fHx/fAF/
+YAR/f398AGAFfHx8fHwBfGALf39/f3x8fHx8fH8BfwMODQABAgMCBAUABgcICQoFAwEADAeDAQ4HY3Vtc3VtRAAACGV4dHJhY3RDAAEEbWVhbgACB3BlYWtB
+YnMAAwhybXNSYW5nZQAECGlzU2lsZW50AAUFd2VpZ2gABgZjdW1zdW0ABwRzY2FuAAgGcmVmaW5lAAkJYnVmVXBkYXRlAAoCcHkACwhwb2x5bGluZQAMBm1l
+bW9yeQIACpQRDWACAX8BfEQAAAAAAAAAACEEIAFBAEEDdGpEAAAAAAAAAAA5AwBBACEDAkADQCADIAJODQEgBCAAIANBAnRqKgIAu6AhBCABIANBAWpBA3Rq
+IAQ5AwAgA0EBaiEDDAALCwtVAQJ/QQAhBgJAA0AgBiACTg0BIAEgBiADbGohByAFIAZBAnRqIAAgByADakEDdGorAwAgACAHQQN0aisDAKEgA7ejIAShtjgC
+ACAGQQFqIQYMAAsLC0UCAX8BfEQAAAAAAAAAACEEQQAhAwJAA0AgAyACTg0BIAQgACABIANqQQJ0aioCALugIQQgA0EBaiEDDAALCyAEIAK3owtOAgF/AnxE
+AAAAAAAAAAAhBUEAIQQCQANAIAQgAk4NASAAIAEgBGpBAnRqKgIAuyADoZkhBiAGIAVkBEAgBiEFCyAEQQFqIQQMAAsLIAULTQIBfwJ8RAAAAAAAAAAAIQRB
+ACEDAkADQCADIAJODQEgACABIANqQQJ0aioCALshBSAEIAUgBaKgIQQgA0EBaiEDDAALCyAEIAK3o58LVAIBfwF8QQAhAgJAA0AgAiABTg0BIAAgAkECdGoq
+AgC7IQMgA0TxaOOItfjkPmQEQEEADwsgA0TxaOOItfjkvmMEQEEADwsgAkEQaiECDAALC0EBC2ACAX8CfEQAAAAAAAAAACEGQQAhBAJAA0AgBCADTg0BIAAg
+BEECdGoqAgC7IAEgBEECdGoqAgC7oiEFIAIgBEECdGogBbY4AgAgBiAFIAWioCEGIARBAWohBAwACwsgBgtgAgF/AXxEAAAAAAAAAAAhBCABQQBBA3RqRAAA
+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
+`;
+class ScopeKernel {
+  static async create() {
+    if (typeof WebAssembly === 'undefined') throw new Error('WebAssembly is not available');
+    const bin = atob(SCOPE_WASM_B64.replace(/\s+/g, '')), u = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    const { instance } = await WebAssembly.instantiate(u, {});
+    return new ScopeKernel(instance.exports);
+  }
+  constructor(x) {
+    this.x = x;
+    const b = x.memory.buffer;                       // memory.grow はしないのでビューは固定
+    this.D = new Float32Array(b, SC.D, SC.DMAX);
+    this.BUF = new Float32Array(b, SC.BUF, SC.WMAX);
+    this.WIN = new Float32Array(b, SC.WIN, SC.WMAX);
+    this.CUR = new Float32Array(b, SC.CUR, SC.WMAX);
+    this.P = new Float64Array(b, SC.POLY, (SC.CSD - SC.POLY) >> 3);
+  }
+}
+
 class CorrScopeVisualizer {
-  constructor(canvas) {
+  constructor(canvas, opts) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.player = null; this.ver = -1;
@@ -2343,6 +2400,8 @@ class CorrScopeVisualizer {
     this.cfg = { diameter: 0.75, bufResp: 0.5, bufFalloff: 0.5, slopeWidth: 0.14,
                  slopeStrength: 0.5, lagPrevention: 0.25 };
     this._loop = this._loop.bind(this);
+    this.k = null;                                   // ScopeKernel (wasm)。準備できるまで JS 実装
+    if (!opts || opts.wasm !== false) ScopeKernel.create().then(k => { this.k = k; }, e => console.warn('[scope] wasm を読み込めないため JS 実装を使います:', e && e.message));
     requestAnimationFrame(this._loop);
   }
 
@@ -2445,6 +2504,41 @@ class CorrScopeVisualizer {
     return bestC;
   }
 
+  // wasm 版トリガ: _trigger と同じ処理 (重いループは全て scope.wasm)。d は SC.D 上の長さ 2N の窓
+  _triggerK(K, st, N, S) {
+    const x = K.x, cfg = this.cfg, half = N >> 1;
+    const mean = x.mean(SC.D, half, N);
+    const n = Math.floor(N / S), Ls = Math.floor((2 * N) / S);
+    x.cumsumD(SC.D, SC.CSD, 2 * N);
+    x.extractC(SC.CSD, 0, Ls, S, mean, SC.DS);
+    const rms = x.rmsRange(SC.DS, n >> 1, n);
+    if (rms < 1e-6) return N;
+    const W = Math.max(8, Math.round(n * cfg.diameter));
+    if (!st.buf || st.buf.length !== W) {
+      st.buf = null; st.win = new Float32Array(W);
+      const c = (W - 1) / 2;
+      for (let j = 0; j < W; j++) { const t = (j - c) / (c || 1); st.win[j] = Math.exp(-cfg.bufFalloff * 3 * t * t); }
+    }
+    if (!st.bw || st.bw.length !== W) { st.bw = new Float32Array(W); st.cur = new Float32Array(W); }   // JS 経路への切替用
+    const hasBuf = !!st.buf;
+    let bufRms = 1;
+    if (hasBuf) {
+      K.BUF.set(st.buf); K.WIN.set(st.win);
+      bufRms = Math.sqrt(x.weigh(SC.BUF, SC.WIN, SC.BW, W) / W) || 1;
+    }
+    const rad = Math.max(1, (n >> 1) - 1);
+    const kk = Math.max(1, Math.round(cfg.slopeWidth * n));
+    x.cumsum(SC.DS, SC.CS, Ls);
+    const hb = hasBuf ? 1 : 0;
+    const bestS = x.scan(SC.DS, SC.BW, SC.CS, W, n, Ls, rad, kk, rms, bufRms, hb, cfg.slopeStrength, cfg.lagPrevention);
+    let bestC = N + bestS * S;
+    if (S > 1) bestC = x.refine(SC.D, SC.CSD, SC.CUR, SC.BW, W, S, kk, N, bestS, mean, rms, bufRms, hb, cfg.slopeStrength);
+    x.extractC(SC.CSD, bestC - ((W * S) >> 1), W, S, mean, SC.CUR);
+    if (!st.buf) st.buf = Float32Array.from(K.CUR.subarray(0, W));
+    else { x.bufUpdate(SC.BUF, SC.CUR, W, cfg.bufResp); st.buf.set(K.BUF.subarray(0, W)); }
+    return bestC;
+  }
+
   _loop() {
     requestAnimationFrame(this._loop);
     if (viewMode !== 'scope') return;
@@ -2461,7 +2555,8 @@ class CorrScopeVisualizer {
     const N = Math.max(256, Math.round(this.winMs * sr / 1000)), L = 2 * N;
     const S = Math.max(1, Math.round(N / 300));
     const back = Math.max(0, Math.min(pl.TAP_LEN - L - 16, Math.round((pl._tcount || 0) - pl.playCount()) - N));
-    if (!this._d || this._d.length !== L) this._d = new Float32Array(L);
+    const K = (this.k && L <= SC.DMAX && N <= SC.NMAX) ? this.k : null;
+    if (!this._d || this._d.length !== L || this._dk !== K) { this._dk = K; this._d = K ? K.D.subarray(0, L) : new Float32Array(L); }
     const d = this._d, n = this.chs.length;
     const cols = this.cols, rows = this.rows, cw = W / cols, ch = H / rows;
     const dpr = Math.max(1, Math.min(W, H * 1.6) / 960);
@@ -2471,7 +2566,8 @@ class CorrScopeVisualizer {
       const x0 = col * cw, y0 = row * ch;
       pl.readTap(k, back, L, d);
       let sil = true;
-      for (let i = 0; i < L; i += 16) if (d[i] > 1e-5 || d[i] < -1e-5) { sil = false; break; }
+      if (K) sil = !!K.x.isSilent(SC.D, L);
+      else for (let i = 0; i < L; i += 16) if (d[i] > 1e-5 || d[i] < -1e-5) { sil = false; break; }
       if (sil) {                                            // 無音: トリガ/波形計算を省略して直線だけ描く
         st.peak *= 0.985;
         c.strokeStyle = '#16233a'; c.lineWidth = 1;
@@ -2483,13 +2579,15 @@ class CorrScopeVisualizer {
         c.fillText(st.label, x0 + 3 * dpr, y0 + 2 * dpr);
         continue;
       }
-      const cen = this._trigger(st, d, N, S);
+      const cen = K ? this._triggerK(K, st, N, S) : this._trigger(st, d, N, S);
       const s0 = cen - (N >> 1);
-      let mean = 0;
-      for (let i = 0; i < N; i++) mean += d[s0 + i];
-      mean /= N;
-      let pk = 0;
-      for (let i = 0; i < N; i++) { const a = Math.abs(d[s0 + i] - mean); if (a > pk) pk = a; }
+      let mean = 0, pk = 0;
+      if (K) { mean = K.x.mean(SC.D, s0, N); pk = K.x.peakAbs(SC.D, s0, N, mean); }
+      else {
+        for (let i = 0; i < N; i++) mean += d[s0 + i];
+        mean /= N;
+        for (let i = 0; i < N; i++) { const a = Math.abs(d[s0 + i] - mean); if (a > pk) pk = a; }
+      }
       st.peak = Math.max(pk, st.peak * 0.985);
       const gain = (this.normalize ? 0.92 / Math.max(st.peak, 0.01) : 0.92 / 0.25) * this.amp;
       const cy = y0 + ch / 2, hh = ch / 2;
@@ -2501,7 +2599,12 @@ class CorrScopeVisualizer {
       c.beginPath(); c.rect(x0, y0, cw, ch); c.clip();
       c.strokeStyle = '#fff'; c.lineWidth = Math.max(1.5, 1.6 * dpr); c.lineJoin = 'round';
       c.beginPath();
-      const step = Math.max(1, Math.floor(N / (cw * 2)));
+      const step = Math.max(1, Math.ceil(N / cw));      // 1px 列あたり最小/最大の 2 点
+      if (K) {                                              // wasm: 描画点列を生成 → JS は lineTo するだけ
+        const np = K.x.polyline(SC.D, s0, N, step, cw, x0, cy, hh, mean, gain, SC.POLY), P = K.P;
+        c.moveTo(P[0], P[1]);
+        for (let q = 1; q < np; q++) c.lineTo(P[2 * q], P[2 * q + 1]);
+      } else {
       const px = (i) => x0 + (i / (N - 1)) * cw;
       const py = (v) => cy - Math.max(-1.6, Math.min(1.6, (v - mean) * gain)) * hh * 0.92;
       if (step === 1) {
@@ -2515,6 +2618,7 @@ class CorrScopeVisualizer {
           const a = imn < imx ? [imn, mn, imx, mx] : [imx, mx, imn, mn];
           for (let q = 0; q < 4; q += 2) { const x = px(a[q]), y = py(a[q + 1]); if (first) { c.moveTo(x, y); first = false; } else c.lineTo(x, y); }
         }
+      }
       }
       c.stroke();
       c.restore();
